@@ -16,21 +16,43 @@ jmp_buf exception_buf;
 int yylex(void);
 int yyerror();
 char *yytext;
+int mainFunctionCount = 0;
+
 typedef struct node {
     char *token;
     struct node *left;
     struct node *right;
 } node;
 
+typedef struct {
+    char *name;
+    char *type;
+} Parameter;
+
+typedef struct {
+    char *access;  // "public" or "private"
+    char *name;
+    char *returnType;
+    int argCount;
+    Parameter *args;  // Dynamic array of parameters
+    int isStatic;  // 1 if static, 0 if not
+} Function;
+
 typedef struct Symbol {
     char *name;
     char *type;
+    union {
+        Function *func;  // For functions
+        // You can add more types here if needed
+    } data;
     struct Symbol *next;
 } Symbol;
 
 typedef struct {
     Symbol *table[TABLE_SIZE];
 } SymbolTable;
+
+
 
 SymbolTable symbolTable;
 
@@ -44,8 +66,34 @@ void semanticCheck(char *leftSide, char *rightSide,int line);
 void printSymbolTable();
 char* inferType(char *value) ;
 char* checkExpressionType(node *expr);
-void freeSymbolTable(); 
+void freeSymbolTable();
+void freeSymbol(Symbol *symbol) ;
 
+
+node *syntax_tree;
+
+
+void postorderTraversal(node *tree) ;
+void processNode(node *tree);
+void handleDeclaration(node *tree);
+void handleStringDeclaration(node *tree);
+void handleAssignment(node *tree);
+void handleFunctionDeclaration(node *tree) ;
+void handleFunctionDefinition(node *tree) ;
+void handleParameters(node *params);
+void handleFunctionCall(node *tree) ;
+void freeSymbol(Symbol *symbol);
+void insertFunction(char *name, char *access, char *returnType, Parameter *args, int argCount, int isStatic);
+void fillParameterArray(node *params, Parameter *args, int *index);
+void countParameters(node *params, int *count) ;
+Parameter* getParameters(node *params, int *count);
+void fillIdList(char *type, node *idList, Parameter *args, int *index);
+void countIdsInList(node *idList, int *count);
+char* getFunctionReturnType(node *functionCall);
+void checkFunctionArguments(Function *func, node *argList);
+void countArguments(node *argList, int *count);
+void checkFunctionReturnType(node *blockNode, char *expectedReturnType, char *funcName, int *hasReturn);
+void checkArgumentsRecursive(Function *func, node *argNode, int argIndex);
 
 node *mknode(char *token, node *left, node *right);
 void printtree(node *tree, int depth);
@@ -70,7 +118,7 @@ extern int yylineno;
 %%
 program: global_list { 
 //printtree(mknode("Program", $1, NULL), 0);
-mknode("Program", $1, NULL);
+syntax_tree = mknode("Program", $1, NULL);
 }
        ;
 
@@ -92,7 +140,7 @@ mknode("DONT",mknode("(Parameter_List",$3,NULL),mknode(")",NULL,NULL))); }
              
 function_declaration: access_modifier return_type ID '(' args parameter_list ')' optional_static ';'
                       { $$ = mknode("Function-Declaration", 
-                                    mknode("Function_Signature", mknode("DONT",$1,$2),mknode("Function-Name",$3,NULL)),mknode("DONT",mknode("(Args>>",$6,NULL),mknode(")",$7,NULL))); }
+                                    mknode("Function_Signature", mknode("DONT",$1,$2),mknode("Function-Name",$3,NULL)),mknode("DONT",mknode("(Args>>",$6,NULL),mknode(")",$7,$8))); }
 
                     ;
 
@@ -115,7 +163,8 @@ access_modifier: PUBLIC { $$ = mknode("Public",NULL,NULL); }
                ;
 
 return_type: type { $$ = $1; }
-           | VOID { $$ = $1; }
+           | VOID { $$ = mknode("void",$1,NULL); }
+          
            ;
 
 parameter_list: parameter_group{ $$ = $1;}
@@ -134,7 +183,6 @@ stmt: ass { $$ = $1; }
     | ST { $$ = mknode("DONT",mknode("(",$1,NULL),mknode(")",NULL,NULL)); }
     | exp ';' { 
      $$ = $1; 
-     char* expType = checkExpressionType($1);
      }
     | RETURN exp ';' { $$ = mknode("RETURN", $2, NULL); }
     | RETURN ';' { $$ = mknode("RETURN", NULL, NULL); }
@@ -155,15 +203,11 @@ single_stmt: ass { $$ = $1; }
 
 declaration: VAR type ':' id_list ';' 
              { 
-               $$ = mknode("Declaration", mknode("(",$2, $4),mknode(")",NULL,NULL));
-         
-               insertIdList($4, $2->token);
-              
+               $$ = mknode("Declaration", mknode("(",$2, $4),mknode(")",NULL,NULL));          
             }
            | STRING string_decl_list ';' 
              { 
-               $$ = mknode("String Declaration", $2, NULL);
-               
+               $$ = mknode("String Declaration", $2, NULL);               
              }
            ;
 
@@ -174,131 +218,58 @@ string_decl_list: string_decl { $$ = $1; }
 string_decl: ID '[' exp ']' 
            { 
              $$ = mknode("String", $1, $3); 
-             char* expType = checkExpressionType($3);
-             
-	       if(strcmp(expType,"INT") != 0 ){ 
-	       fprintf(stderr, "Semantic Error at line %d: [ ] must contain a int literal , got '%s' \n", yylineno, expType);
-	       THROW;     
-	     }
-             insert($1->token, "STRING");
+        
            }
            | ID '[' exp ']' ASS exp  
            { 
              $$ = mknode("String Assignment", $1, mknode("[",$3,mknode("]",$6,NULL)));
-              char* expType = checkExpressionType($3);
-	       if(strcmp(expType,"INT") != 0 ){ 
-	       fprintf(stderr, "Semantic Error at line %d: [ ] must contain a int literal , got '%s' \n", yylineno, expType);
-	       THROW;     
-	     }
-	     expType = checkExpressionType($6);
-	     if(strcmp(expType,"STRING") != 0 ){ 
-	       fprintf(stderr, "Semantic Error at line %d : incorrect assignment, must assign STRING, got '%s'\n", yylineno,expType);
-	       THROW;     
-	     }
-             //semanticCheck($1->token, $6->token,yylineno);
-             insert($1->token, "STRING");
-             
+        
            }
            ;
-
-
-       
+     
 type: BOOL {$$ =mknode("BOOL",NULL,NULL);}| CHAR {$$ =mknode("CHAR",NULL,NULL);}| INT {$$ =mknode("INT",NULL,NULL);} 
     | DOUBLE {$$ =mknode("DOUBLE",NULL,NULL);}|FLOAT {$$ =mknode("FLOAT",NULL,NULL);}
-    | INT_PTR {$$ =mknode("INT Pointer",NULL,NULL);}  | CHAR_PTR {$$ =mknode("CHAR Pointer",NULL,NULL);}| DOUBLE_PTR {$$ =mknode("DOUBLE Pointer",NULL,NULL);}| FLOAT_PTR {$$ =mknode("FLOAT Pointer",NULL,NULL);}
+    | INT_PTR {$$ =mknode("INT Pointer",NULL,NULL);}  | CHAR_PTR {$$ =mknode("CHAR Pointer",NULL,NULL);}| DOUBLE_PTR {$$ =mknode("DOUBLE Pointer",NULL,NULL);}| FLOAT_PTR {$$ =mknode("FLOAT Pointer",NULL,NULL); }
     ;
     
 ST: IF '(' exp ')' block_stmt { 
 	      $$ = mknode("IF", $3, mknode("THEN", $5, mknode("BLOCK)",NULL,NULL)));
-	       char* expType = checkExpressionType($3);
-	       if(strcmp(expType,"BOOL") != 0 ){
-		       fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-		       THROW; 
-	       }
 }
 
   | IF '(' exp ')' single_stmt { 
 	  $$ = mknode("IF", $3, mknode("THEN", $5, NULL)); 
-	  char* expType = checkExpressionType($3);
-	  if(strcmp(expType,"BOOL") != 0 ){
-		     fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-		     THROW;
-	    }
   }
   
   | IF '(' exp ')' block_stmt ELSE block_stmt{
 	  $$=mknode("IF ELSE STMT",mknode("IF",$3,mknode("THEN",$5,mknode("BLOCK)",NULL,NULL))),mknode("ELSE",     $7,mknode("BLOCK)",NULL,NULL)) );
-	  char* expType = checkExpressionType($3);
-	  if(strcmp(expType,"BOOL") != 0 ){  
-		       fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-		       THROW;
-	       }
        }
   | IF '(' exp ')' single_stmt ELSE single_stmt { 
        $$ = mknode("IF-ELSE", $3, mknode("THEN", $5, mknode("ELSE", $7, NULL))); 
-       char* expType = checkExpressionType($3);
-       if(strcmp(expType,"BOOL") != 0 ){
-		      fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-		      THROW;
-              }
        }
   | IF '(' exp')' block_stmt ELSE single_stmt { 
        $$ = mknode("IF ELSE STMT",mknode("IF",$3,mknode("THEN",$5,mknode("BLOCK)",NULL,NULL))),mknode("ELSE",$7,NULL));
-       char* expType = checkExpressionType($3);
-       if(strcmp(expType,"BOOL") != 0 ){
-	       fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-	       THROW;
-               }
        }
   | IF '(' exp ')' single_stmt ELSE block_stmt { 
        $$ = mknode("IF-ELSE",mknode("IF", $3, mknode("THEN", $5, NULL)),mknode("ELSE", $7, mknode("BLOCK)",NULL,NULL)));
-       char* expType = checkExpressionType($3);
-       if(strcmp(expType,"BOOL") != 0 ){
-	       fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-	       THROW;  
-               }
        }
-  
   
   | WHILE '(' exp ')' block_stmt { 
       $$ = mknode("WHILE", $3, mknode("THEN", $5, mknode("BLOCK)",NULL,NULL))); 
-      char* expType = checkExpressionType($3);
-       if(strcmp(expType,"BOOL") != 0 ){  
-	       fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-	       THROW;
-       
-               }
        }
        
   
   | DO block_stmt  WHILE '(' exp ')' ';'
     { 
        $$ = mknode("DO-WHILE",mknode("BODY", $2,mknode("BLOCK)",NULL,NULL)),mknode("CONDITION", $5, NULL));
-       char* expType = checkExpressionType($5);
-       if(strcmp(expType,"BOOL") != 0 ){
-	       fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-	       THROW;   
-             }
     }
-  
-
-  
+   
   | FOR '(' ass_no_semi ';' exp ';' ass_no_semi ')' block_stmt 
     { 
     	$$ = mknode("FOR",$3,mknode("COND", $5, mknode("UPDATE", $7, mknode("THEN", $9, mknode("BLOCK)",NULL,NULL)))));
-    	char* expType = checkExpressionType($5);
-        if(strcmp(expType,"BOOL") != 0 ){
-        fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-        THROW;
-       }
     }
   | FOR '(' ass_no_semi ';' exp ';' ass_no_semi ')' stmt
     { $$ = mknode("FOR", $3, mknode("COND", $5,mknode("UPDATE", $7, mknode("THEN", $9, NULL))));
-       char* expType = checkExpressionType($5);
-        if(strcmp(expType,"BOOL") != 0 ){
-        fprintf(stderr, "Semantic Error at line %d: Condition expression must be of type BOOL, got '%s' \n", yylineno, expType);
-        THROW;
-       }
+
     };
  
 block_stmt: '{' declarations statements '}' { $$ = mknode("(BLOCK", $2, $3); }
@@ -317,14 +288,10 @@ statements: stmt statements { $$ = mknode("DONT", $1, $2); }
 ass: ID ASS exp ';' 
      { 
        $$ = mknode("ASSIGN", $1, mknode("<-",$3,NULL)); 
-       char* expType = checkExpressionType($3);
-       semanticCheck($1->token, expType,yylineno);
      }
    ;
 ass_no_semi: ID ASS exp { 
         $$ = mknode("ASSIGN", $1, mknode("<-",$3,NULL)); 
-        char* expType = checkExpressionType($3);
-         semanticCheck($1->token, expType,yylineno);
         }
            | 
            ;
@@ -370,11 +337,15 @@ argument_list: argument_list ',' exp { $$ = mknode("DONT", $1, $3); }
 %%
 #include "lex.yy.c"
 int main() {
-   // return yyparse();
     initSymbolTable();
     int result = yyparse();
-    printSymbolTable();  // Print symbol table after parsing
-    freeSymbolTable(); 
+     mainFunctionCount = 0;
+    if (result == 0) {  // If parsing was successful
+        postorderTraversal(syntax_tree);
+    }
+    //printtree(syntax_tree,0);
+    printSymbolTable();
+    freeSymbolTable();
     return result;
 }
 void printtree(node *tree, int depth) {
@@ -390,7 +361,6 @@ void printtree(node *tree, int depth) {
         printf("%s\n", tree->token);
     }
 
-    
     if (tree->left != NULL) {
     
         printtree(tree->left, depth + 1);
@@ -421,10 +391,6 @@ node *mknode(char *token, node *left, node *right) {
     newnode->token = newstr;
     return newnode;
 }
-
-
-
-
 
 unsigned int hash(char *name) {
     unsigned int hashval = 0;
@@ -593,40 +559,6 @@ char* inferType(char *value) {
     return "UNKNOWN";
 }
 
-
-
-
-
-
-
-void printSymbolTable() {
-    printf("Symbol Table:\n");
-    for (int i = 0; i < TABLE_SIZE; i++) {
-        Symbol *current = symbolTable.table[i];
-        while (current != NULL) {
-            printf("Name: %s, Type: %s\n", current->name, current->type);
-            current = current->next;
-        }
-    }
-}
-
-void freeSymbolTable() {
-    for (int i = 0; i < TABLE_SIZE; i++) {
-        Symbol *current = symbolTable.table[i];
-        while (current != NULL) {
-            Symbol *next = current->next;
-            free(current->name);
-            free(current->type);
-            free(current);
-            current = next;
-        }
-        symbolTable.table[i] = NULL;
-    }
-}
-
-
-
-
 char* checkExpressionType(node *expr) {
     if (expr == NULL) {
         return "UNKNOWN";
@@ -636,29 +568,13 @@ char* checkExpressionType(node *expr) {
     
        return checkExpressionType(expr->left->left);
     }
-    // Handle string array declaration
-  //  if (strcmp(expr->token, "String") == 0) {
-        
-        // Check if the size expression is an integer
-    //    char* sizeType = checkExpressionType(expr->right);
-        //if (strcmp(sizeType, "INT") != 0) {
-      //      fprintf(stderr, "Semantic Error: Array size must be an integer\n");
-          //  THROW;
-        //}
-        //return "STRING";
-   // }
 
    
     if (expr->left == NULL && expr->right == NULL) {
         //fprintf(stderr, "'%s'\n",expr->token);
         // For literals, the token itself should be the type
         if (strcmp(expr->token, "INT_LITERAL") == 0) return "INT";
-        //if (strcmp(expr->token, "HEX_LITERAL") == 0) return "INT";
-        //if (strcmp(expr->token, "DOUBLE_LITERAL") == 0) return "DOUBLE";
-        //if (strcmp(expr->token, "FLOAT_LITERAL") == 0) return "FLOAT";
-        //if (strcmp(expr->token, "BOOL_LITERAL") == 0) return "BOOL";
-        //if (strcmp(expr->token, "CHAR_LITERAL") == 0) return "CHAR";
-        //if (strcmp(expr->token, "STRING_LITERAL") == 0) return "STRING";
+      
        if (strcmp(expr->token, "NULL") == 0) return "NULL";
        if (strcmp(expr->token, "true") == 0 || strcmp(expr->token, "false") == 0) {
              return "BOOL"; // Boolean literal
@@ -711,6 +627,7 @@ char* checkExpressionType(node *expr) {
 
     // Handle binary operators
     char *leftType = checkExpressionType(expr->left);
+  //  char *leftType = checkExpresint isStatic;  // 1 if static, 0 if notsionType(expr->left);
     char *rightType = checkExpressionType(expr->right);
 
     // Arithmetic operators
@@ -752,3 +669,590 @@ char* checkExpressionType(node *expr) {
  
     return "UNKNOWN";
 }
+
+
+void postorderTraversal(node *tree) {
+    if (tree == NULL) return;
+
+    postorderTraversal(tree->left);
+    postorderTraversal(tree->right);
+    // printf("Processing node: %s\n", tree->token); 
+    processNode(tree);
+}
+
+void processNode(node *tree) {
+    if (tree == NULL) return;
+
+    if (strcmp(tree->token, "Declaration") == 0 || 
+        strcmp(tree->token, "String Declaration") == 0) {
+        handleDeclaration(tree);
+    } else if (strcmp(tree->token, "ASSIGN") == 0) {
+        handleAssignment(tree);
+    } else if (strcmp(tree->token, "Function-Declaration") == 0) {
+        handleFunctionDeclaration(tree);
+    } else if (strcmp(tree->token, "Function-Definition") == 0) {
+        handleFunctionDefinition(tree);
+    } else if (strcmp(tree->token, "Function-Call") == 0) {
+        handleFunctionCall(tree);
+    }
+}
+
+void handleDeclaration(node *tree) {
+    if (strcmp(tree->token, "Declaration") == 0) {
+        // Regular variable declaration
+        if (tree->left && strcmp(tree->left->token, "(") == 0) {
+            node *typeNode = tree->left->left;
+            node *idListNode = tree->left->right;
+            if (typeNode && idListNode) {
+                insertIdList(idListNode, typeNode->token);
+            }
+        }
+    } else if (strcmp(tree->token, "String Declaration") == 0) {
+        // String declaration
+        handleStringDeclaration(tree->left);
+    }
+}
+
+void handleStringDeclaration(node *tree) {
+    if (tree == NULL) return;
+    
+    if (strcmp(tree->token, "String") == 0) {
+        // Single string declaration
+        if (tree->left) {
+            insert(tree->left->token, "STRING");
+        }
+    } else if (strcmp(tree->token, "String Assignment") == 0) {
+        // String declaration with assignment
+        if (tree->left) {
+            insert(tree->left->token, "STRING");
+        }
+    } else if (strcmp(tree->token, "DONT") == 0) {
+        // Multiple string declarations
+        handleStringDeclaration(tree->left);
+        handleStringDeclaration(tree->right);
+    }
+}
+
+void handleAssignment(node *tree) {
+    char *leftSide = tree->left->token;
+    node *rightSide = tree->right->left;
+    
+    char *rightType;
+    if (strcmp(rightSide->token, "Function-Call") == 0) {
+        rightType = getFunctionReturnType(rightSide);
+    } else {
+        rightType = checkExpressionType(rightSide);
+    }
+    
+    semanticCheck(leftSide, rightType, yylineno);
+}
+char* getFunctionReturnType(node *functionCall) {
+    node *funcNameNode = functionCall->left;
+    if (funcNameNode && strcmp(funcNameNode->token, "Function-Name") == 0) {
+        Symbol *sym = lookup(funcNameNode->left->token);
+        if (sym && strcmp(sym->type, "FUNCTION") == 0) {
+            return sym->data.func->returnType;
+        }
+    }
+    return "UNKNOWN";
+}
+void handleFunctionDeclaration(node *tree) {
+    node *functionSignature = tree->left;
+    node *argsList = tree->right;
+    
+    if (functionSignature && strcmp(functionSignature->token, "Function_Signature") == 0) {
+        node *modifierAndType = functionSignature->left;
+        node *funcName = functionSignature->right;
+        
+        if (modifierAndType && funcName && 
+            strcmp(modifierAndType->token, "DONT") == 0 &&
+            strcmp(funcName->token, "Function-Name") == 0) {
+            
+            char *access = modifierAndType->left ? modifierAndType->left->token : "UNKNOWN";
+            char *returnType = modifierAndType->right ? modifierAndType->right->token : "UNKNOWN";
+            char *funcNameStr = funcName->left ? funcName->left->token : "UNKNOWN";
+            
+            int isStatic = 0;
+            if (argsList && strcmp(argsList->token, "DONT") == 0) {
+                node *staticNode = argsList->right->right; // The optional_static is the right child of the ")" node
+                if (staticNode && strcmp(staticNode->token, "STATIC") == 0) {
+                    isStatic = 1;
+                }
+            }
+            
+            // Handle parameters
+            Parameter *args = NULL;
+            int argCount = 0;
+            if (argsList && strcmp(argsList->token, "DONT") == 0) {
+                node *argsNode = argsList->left;
+                if (argsNode && strcmp(argsNode->token, "(Args>>") == 0) {
+                    args = getParameters(argsNode->left, &argCount);
+                }
+            }
+            
+            // Insert function declaration into symbol table
+            insertFunction(funcNameStr, access, returnType, args, argCount, isStatic);
+            
+            // Free the temporary args array
+            if (args) {
+                for (int i = 0; i < argCount; i++) {
+                    free(args[i].name);
+                    free(args[i].type);
+                }
+                free(args);
+            }
+        }
+    }
+}
+
+void handleFunctionDefinition(node *tree) {
+    node *signatureNode = tree->left;
+    node *bodyNode = tree->right;
+    
+    if (signatureNode && strcmp(signatureNode->token, "DONT") == 0) {
+        node *modifierAndType = signatureNode->left;
+        node *funcName = signatureNode->right;
+        
+        if (modifierAndType && funcName && 
+            strcmp(modifierAndType->token, "Function-Modifier-return_type") == 0 &&
+            strcmp(funcName->token, "Function-Name") == 0) {
+            
+            char *access = modifierAndType->left ? modifierAndType->left->token : "UNKNOWN";
+            char *returnType = modifierAndType->right ? modifierAndType->right->token : "UNKNOWN";
+            char *funcNameStr = funcName->left ? funcName->left->token : "UNKNOWN";
+            
+            int isStatic = 0;
+            if (bodyNode && strcmp(bodyNode->token, "DONT") == 0) {
+                node *optionalStatic = bodyNode->left;
+                if (optionalStatic && strcmp(optionalStatic->token, "STATIC") == 0) {
+                    isStatic = 1;
+                }
+            }
+            
+            // Handle parameters
+            Parameter *args = NULL;
+            int argCount = 0;
+            if (bodyNode && bodyNode->right && strcmp(bodyNode->right->token, "DONT") == 0) {
+                node *argsNode = bodyNode->right->left;
+                if (argsNode && strcmp(argsNode->token, "(Args>>") == 0) {
+                    args = getParameters(argsNode->left, &argCount);
+                }
+            }
+            
+            // Check if it's the main function
+            if (strcmp(funcNameStr, "main") == 0) {
+                if (strcmp(access, "Public") != 0 || !isStatic || 
+                    strcmp(returnType, "void") != 0 || argCount != 0) {
+                    fprintf(stderr, "Error: main function must be public static void main() with no arguments\n");
+                    THROW;
+                }
+                if (mainFunctionCount > 0) {
+                    fprintf(stderr, "Error: Multiple main functions defined\n");
+                    THROW;
+                }
+                mainFunctionCount++;
+            } else {
+                // For non-main functions, check if they were declared
+                Symbol *existing = lookup(funcNameStr);
+                if (!existing || strcmp(existing->type, "FUNCTION") != 0) {
+                    fprintf(stderr, "Error: Function '%s' defined without declaration\n", funcNameStr);
+                    THROW;
+                }
+                
+                // Check if the definition matches the declaration
+                Function *declaredFunc = existing->data.func;
+                if (strcmp(declaredFunc->access, access) != 0) {
+                    fprintf(stderr, "Error: Access modifier mismatch for function '%s'\n", funcNameStr);
+                    THROW;
+                }
+                if (strcmp(declaredFunc->returnType, returnType) != 0) {
+                    fprintf(stderr, "Error: Return type mismatch for function '%s'\n", funcNameStr);
+                    THROW;
+                }
+                if (declaredFunc->isStatic != isStatic) {
+                    fprintf(stderr, "Error: Static modifier mismatch for function '%s'\n", funcNameStr);
+                    THROW;
+                }
+                if (declaredFunc->argCount != argCount) {
+                    fprintf(stderr, "Error: Argument count mismatch for function '%s'\n", funcNameStr);
+                    THROW;
+                }
+                for (int i = 0; i < argCount; i++) {
+                    if (strcmp(declaredFunc->args[i].type, args[i].type) != 0) {
+                        fprintf(stderr, "Error: Argument type mismatch for function '%s', argument %d\n", funcNameStr, i+1);
+                        THROW;
+                    }
+                    // Note: We don't check argument names as they can be different in declaration and definition
+                }
+            }
+            node *blockNode = NULL;
+            if (bodyNode && bodyNode->right && bodyNode->right->right) {
+                blockNode = bodyNode->right->right->left; // Navigate to the actual block
+            }
+            
+            if (blockNode) {
+                int hasReturn = 0;
+                checkFunctionReturnType(blockNode, returnType, funcNameStr, &hasReturn);
+                
+                if (!hasReturn && strcmp(returnType, "void") != 0) {
+                    fprintf(stderr, "Semantic Error: Non-void function '%s' has no return statement\n", funcNameStr);
+                    THROW;
+                }
+            }
+            
+            // Free the temporary args array
+            if (args) {
+                for (int i = 0; i < argCount; i++) {
+                    free(args[i].name);
+                    free(args[i].type);
+                }
+                free(args);
+            }
+        }
+    }
+}
+void checkFunctionReturnType(node *blockNode, char *expectedReturnType, char *funcName, int *hasReturn) {
+    if (blockNode == NULL) return;
+    
+    if (strcmp(blockNode->token, "RETURN") == 0) {
+        *hasReturn = 1;
+        if (blockNode->left == NULL) {
+            // Empty return statement
+            if (strcmp(expectedReturnType, "void") != 0) {
+                fprintf(stderr, "Semantic Error: Function '%s' with return type '%s' has an empty return statement\n", 
+                        funcName, expectedReturnType);
+                THROW;
+            }
+        } else {
+            // Return with expression
+            char *actualReturnType = checkExpressionType(blockNode->left);
+            if (!areTypesCompatible(expectedReturnType, actualReturnType)) {
+                fprintf(stderr, "Semantic Error: Function '%s' returns '%s', but '%s' was expected\n", 
+                        funcName, actualReturnType, expectedReturnType);
+                THROW;
+            }
+        }
+    } else if (strcmp(blockNode->token, "DONT") == 0 || strcmp(blockNode->token, "(BLOCK") == 0) {
+        checkFunctionReturnType(blockNode->left, expectedReturnType, funcName, hasReturn);
+        checkFunctionReturnType(blockNode->right, expectedReturnType, funcName, hasReturn);
+    }
+}
+
+Parameter* getParameters(node *params, int *count) {
+ //   printf("Getting parameters\n");
+    if (params == NULL) {
+       // printf("Params is NULL\n");
+        *count = 0;
+        return NULL;
+    }
+    
+    // First, count the parameters
+    int paramCount = 0;
+    countParameters(params, &paramCount);
+   // printf("Parameter count: %d\n", paramCount);
+    
+    if (paramCount == 0) {
+        *count = 0;
+        return NULL;
+    }
+    
+    // Allocate the array
+    Parameter *args = (Parameter *)malloc(sizeof(Parameter) * paramCount);
+    if (args == NULL) {
+    //    printf("Memory allocation failed for args\n");
+        *count = 0;
+        return NULL;
+    }
+    
+    // Initialize all elements to NULL
+    for (int i = 0; i < paramCount; i++) {
+        args[i].name = NULL;
+        args[i].type = NULL;
+    }
+    
+    // Fill the array
+    int index = 0;
+    fillParameterArray(params, args, &index);
+    
+    // Check if all parameters were filled
+    if (index != paramCount) {
+     //   printf("Warning: Not all parameters were filled. Expected %d, got %d\n", paramCount, index);
+    }
+    
+    *count = paramCount;
+    return args;
+}
+
+void countParameters(node *params, int *count) {
+    if (params == NULL) return;
+    
+    //printf("countParameters: Processing node with token '%s'\n", params->token);
+    
+    if (strcmp(params->token, "DONT") == 0) {
+        if (params->left && strcmp(params->left->token, "DONT") != 0) {
+            // This is a type:id_list structure
+            countIdsInList(params->right, count);
+        } else {
+            // This is a list of parameter groups
+            countParameters(params->left, count);
+            countParameters(params->right, count);
+        }
+    } else {
+        printf("countParameters: Unexpected node type: %s\n", params->token);
+    }
+}
+
+void countIdsInList(node *idList, int *count) {
+    if (idList == NULL) return;
+    
+    if (strcmp(idList->token, "DONT") != 0) {
+        (*count)++;
+    } else {
+        countIdsInList(idList->left, count);
+        countIdsInList(idList->right, count);
+    }
+}
+void fillParameterArray(node *params, Parameter *args, int *index) {
+    if (params == NULL) {
+     //   printf("fillParameterArray: params is NULL\n");
+        return;
+    }
+    
+    //printf("fillParameterArray: Processing node with token '%s'\n", params->token);
+    
+    if (strcmp(params->token, "DONT") == 0) {
+        if (params->left && strcmp(params->left->token, "DONT") != 0) {
+            // This is a type:id_list structure
+            node *type = params->left;
+            node *idList = params->right;
+          //  printf("fillParameterArray: Found type:id_list structure. Type: %s\n", type->token);
+            fillIdList(type->token, idList, args, index);
+        } else {
+            // This is a list of parameter groups
+            fillParameterArray(params->left, args, index);
+            fillParameterArray(params->right, args, index);
+        }
+    } else {
+        printf("fillParameterArray: Unexpected node type: %s\n", params->token);
+    }
+}
+
+void fillIdList(char *type, node *idList, Parameter *args, int *index) {
+    if (idList == NULL) {
+      //  printf("fillIdList: idList is NULL\n");
+        return;
+    }
+    
+   // printf("fillIdList: Processing node with token '%s'\n", idList->token);
+    
+    if (strcmp(idList->token, "DONT") != 0) {
+        args[*index].type = strdup(type);
+        args[*index].name = strdup(idList->token);
+       // printf("fillIdList: Added parameter %s of type %s at index %d\n", args[*index].name, args[*index].type, *index);
+        (*index)++;
+    } else {
+        fillIdList(type, idList->left, args, index);
+        fillIdList(type, idList->right, args, index);
+    }
+}
+
+void insertFunction(char *name, char *access, char *returnType, Parameter *args, int argCount, int isStatic) {
+    if (!name || !access || !returnType) {
+        printf("Error: NULL pointer passed to insertFunction\n");
+        return;
+    }
+    
+    unsigned int index = hash(name);
+    
+    // Check if function already exists
+    Symbol *existing = lookup(name);
+    if (existing && strcmp(existing->type, "FUNCTION") == 0) {
+       // printf("Warning: Function '%s' already declared. Ignoring redeclaration.\n", name);
+        return;
+    }
+
+    // Create new symbol for the function
+    Symbol *newSymbol = (Symbol *)malloc(sizeof(Symbol));
+    if (!newSymbol) {
+      //  printf("Error: Memory allocation failed for new symbol\n");
+        return;
+    }
+    
+    newSymbol->name = strdup(name);
+    newSymbol->type = strdup("FUNCTION");
+    
+    Function *func = (Function *)malloc(sizeof(Function));
+    if (!func) {
+      //  printf("Error: Memory allocation failed for new function\n");
+        free(newSymbol->name);
+        free(newSymbol->type);
+        free(newSymbol);
+        return;
+    }
+    
+    func->access = strdup(access);
+    func->name = strdup(name);
+    func->returnType = strdup(returnType);
+    func->argCount = argCount;
+    func->isStatic = isStatic;
+     //printf("Inserting function: %s, isStatic: %d\n", name, isStatic);
+    if (argCount > 0) {
+        func->args = (Parameter *)malloc(sizeof(Parameter) * argCount);
+        if (!func->args) {
+        //    printf("Error: Memory allocation failed for function arguments\n");
+            free(func->access);
+            free(func->name);
+            free(func->returnType);
+            free(func);
+            free(newSymbol->name);
+            free(newSymbol->type);
+            free(newSymbol);
+            return;
+        }
+        
+        for (int i = 0; i < argCount; i++) {
+            func->args[i].name = strdup(args[i].name);
+            func->args[i].type = strdup(args[i].type);
+        }
+    } else {
+        func->args = NULL;
+    }
+    
+    newSymbol->data.func = func;
+    newSymbol->next = symbolTable.table[index];
+    symbolTable.table[index] = newSymbol;
+    
+  // printf("Function inserted successfully: %s\n", name);
+}
+
+void freeSymbol(Symbol *symbol) {
+    free(symbol->name);
+    free(symbol->type);
+    if (strcmp(symbol->type, "FUNCTION") == 0) {
+        Function *func = symbol->data.func;
+        free(func->access);
+        free(func->name);
+        free(func->returnType);
+        for (int i = 0; i < func->argCount; i++) {
+            free(func->args[i].name);
+            free(func->args[i].type);
+        }
+        free(func->args);
+        free(func);
+    }
+    free(symbol);
+}
+
+void freeSymbolTable() {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        Symbol *current = symbolTable.table[i];
+        while (current != NULL) {
+            Symbol *next = current->next;
+            freeSymbol(current);
+            current = next;
+        }
+        symbolTable.table[i] = NULL;
+    }
+}
+
+
+
+void handleFunctionCall(node *tree) {
+    if (strcmp(tree->token, "Function-Call") == 0) {
+        node *funcName = tree->left;
+        node *argListNode = tree->right;
+        
+        if (funcName && strcmp(funcName->token, "Function-Name") == 0) {
+            Symbol *sym = lookup(funcName->left->token);
+            if (sym == NULL || strcmp(sym->type, "FUNCTION") != 0) {
+                fprintf(stderr, "Semantic Error: Function '%s' not declared\n", funcName->left->token);
+                THROW;
+            }
+            
+            Function *func = sym->data.func;
+          
+            
+            // Navigate to the actual argument list
+            node *actualArgList = NULL;
+            if (argListNode && strcmp(argListNode->token, "DONT") == 0) {
+                node *paramListNode = argListNode->left;
+                if (paramListNode && strcmp(paramListNode->token, "(Parameter_List") == 0) {
+                    actualArgList = paramListNode->left;
+                }
+            }
+            
+            checkFunctionArguments(func, actualArgList);
+        }
+    }
+}
+
+void checkFunctionArguments(Function *func, node *argList) {
+    int argCount = 0;
+    countArguments(argList, &argCount);
+    
+    if (argCount != func->argCount) {
+        fprintf(stderr, "Semantic Error: Function '%s' called with wrong number of arguments. Expected %d, got %d\n", 
+                func->name, func->argCount, argCount);
+        THROW;
+    }
+    
+    checkArgumentsRecursive(func, argList, 0);
+}
+
+void checkArgumentsRecursive(Function *func, node *argNode, int argIndex) {
+    if (argNode == NULL) return;
+
+    if (strcmp(argNode->token, "DONT") == 0) {
+        checkArgumentsRecursive(func, argNode->left, argIndex);
+        checkArgumentsRecursive(func, argNode->right, argIndex + 1);
+    } else {
+        Symbol *sym = lookup(argNode->token);
+        if (sym == NULL) {
+            fprintf(stderr, "Semantic Error: Undeclared variable '%s' used as argument in function call to '%s'\n", 
+                    argNode->token, func->name);
+            THROW;
+        }
+        
+        // Check if the argument type matches the parameter type
+        if (argIndex < func->argCount && !areTypesCompatible(func->args[argIndex].type, sym->type)) {
+            fprintf(stderr, "Semantic Error: Type mismatch for argument '%s' in function call to '%s'. Expected %s, got %s\n", 
+                    argNode->token, func->name, func->args[argIndex].type, sym->type);
+            THROW;
+        }
+    }
+}
+
+void countArguments(node *argList, int *count) {
+    if (argList == NULL) return;
+    
+    if (strcmp(argList->token, "DONT") != 0) {
+        (*count)++;
+    } else {
+        countArguments(argList->left, count);
+        countArguments(argList->right, count);
+    }
+}
+
+void printSymbolTable() {
+    printf("Symbol Table:\n");
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        Symbol *current = symbolTable.table[i];
+        while (current != NULL) {
+            if (strcmp(current->type, "FUNCTION") == 0) {
+                Function *func = current->data.func;
+                printf("Function: %s %s%s %s(", func->access, 
+                       func->isStatic ? "static " : "", 
+                       func->returnType, func->name);
+                for (int j = 0; j < func->argCount; j++) {
+                    printf("%s %s", func->args[j].type, func->args[j].name);
+                    if (j < func->argCount - 1) printf(", ");
+                }
+                printf(")\n");
+            } else {
+                printf("Variable: %s, Type: %s\n", current->name, current->type);
+            }
+            current = current->next;
+        }
+    }
+}
+//~

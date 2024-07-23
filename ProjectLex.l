@@ -2,6 +2,8 @@
 
 #include <string.h>
 #include "y.tab.h"
+jmp_buf exception_buf;
+#define THROW longjmp(exception_buf, 1)
 extern YYSTYPE yylval;
 
 %}
@@ -11,7 +13,7 @@ extern YYSTYPE yylval;
 "/*"            { BEGIN(COMMENT); }
 <COMMENT>"*/"   { BEGIN(INITIAL); }
 <COMMENT>.|\n   { /* Ignore everything inside comments */ }
-<COMMENT><<EOF>> { fprintf(stderr, "Error: Unclosed comment\n"); return 0; }
+<COMMENT><<EOF>> { fprintf(stderr, "Error: Unclosed comment\n"); THROW; }
 [ \t\n]+    { /* Ignore whitespace */ }
 
 "if"        { return IF; }
@@ -37,6 +39,7 @@ extern YYSTYPE yylval;
 "char*"     { return CHAR_PTR; }
 "double*"   { return DOUBLE_PTR; }
 "float*"    { return FLOAT_PTR; }
+
 
 "+"         { return PLUS; }
 "-"         { return MINUS; }
