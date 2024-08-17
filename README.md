@@ -1,5 +1,5 @@
-### Overview
-This release introduces significant improvements to syntax parsing, code generation, and stack management, enhancing the compiler's efficiency and robustness.
+### Description:
+ This compiler is designed to translate high-level C-like code into three-address code (3AC) with a focus on precise scope and stack management, utilizing Lex and Yacc. The release includes:
 
 ### Key Features
 * **Syntax Parsing:**
