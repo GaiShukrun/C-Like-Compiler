@@ -1,6 +1,8 @@
 ### Description:
  This compiler is designed to translate high-level C-like code into three-address code (3AC) with a focus on precise scope and stack management, utilizing Lex and Yacc. The release includes:
 
+**⚠️ IMPORTANT NOTE:** The main source files (ProjectLex.l and ProjectYacc.y) were restored from local backups due to technical issues that caused the original repository content to be lost. These files now contain the complete and final implementation.
+
 ### Key Features
 * **Syntax Parsing:**
   * Supports a wider range of C-like syntax constructs.
