@@ -1,4 +1,5 @@
-# 🚀 C-Like Compiler
+<div align="center" >
+<h1>🚀 C-Like Compiler </h1>
 
 [![Language](https://img.shields.io/badge/Language-C-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
 [![Parser](https://img.shields.io/badge/Parser-Yacc/Bison-green.svg)](https://www.gnu.org/software/bison/)
@@ -10,8 +11,8 @@
 > 🎯 **A sophisticated compiler that translates C-like source code into optimized Three-Address Code (3AC) with advanced semantic analysis and scope management.**
 
 **⚠️ IMPORTANT NOTE:** The main source files (ProjectLex.l and ProjectYacc.y) were restored from local backups due to technical issues that caused the original repository content to be lost. These files now contain the complete and final implementation.
+</div>
 
----
 
 ## 📋 Table of Contents
 - [🌟 Key Features](#-key-features)
